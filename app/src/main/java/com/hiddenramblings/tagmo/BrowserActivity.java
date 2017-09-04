@@ -10,7 +10,9 @@ import android.net.ConnectivityManager;
 import android.net.NetworkInfo;
 import android.net.Uri;
 import android.os.Bundle;
+import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
+import android.support.design.widget.BottomSheetBehavior;
 import android.support.v4.widget.SwipeRefreshLayout;
 import android.support.v7.app.AppCompatActivity;
 import android.support.v7.widget.LinearLayoutManager;
@@ -46,6 +48,7 @@ import com.robertlevonyan.views.chip.OnCloseClickListener;
 
 import org.androidannotations.annotations.AfterViews;
 import org.androidannotations.annotations.Background;
+import org.androidannotations.annotations.Click;
 import org.androidannotations.annotations.EActivity;
 import org.androidannotations.annotations.OptionsItem;
 import org.androidannotations.annotations.OptionsMenu;
@@ -87,11 +90,19 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
     @ViewById(R.id.chip_list)
     FlowLayout chipList;
     @ViewById(R.id.list)
-    RecyclerView listView;
+    RecyclerView amiibosView;
     @ViewById(R.id.swiperefresh)
     SwipeRefreshLayout swipeRefreshLayout;
     @ViewById(R.id.internalEmpty)
     TextView emptyText;
+    @ViewById(R.id.folders)
+    RecyclerView foldersView;
+    @ViewById(R.id.bottom_sheet)
+    ViewGroup bottomSheet;
+    @ViewById(R.id.current_folder)
+    TextView currentFolderView;
+    @ViewById(R.id.toggle)
+    ImageView toggle;
 
     @OptionsMenuItem(R.id.search)
     MenuItem menuSearch;
@@ -128,9 +139,10 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
 
     SearchView searchView;
 
+    BottomSheetBehavior bottomSheetBehavior;
     ArrayList<AmiiboFile> amiiboFiles = null;
-
     AmiiboManager amiiboManager = null;
+    File currentFolder;
 
     @Pref
     Preferences_ prefs;
@@ -178,30 +190,48 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
 
     @AfterViews
     protected void afterViews() {
+        bottomSheetBehavior = BottomSheetBehavior.from(bottomSheet);
+        bottomSheetBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);
+        bottomSheetBehavior.setBottomSheetCallback(new BottomSheetBehavior.BottomSheetCallback() {
+            @Override
+            public void onStateChanged(@NonNull View bottomSheet, int newState) {
+                if (newState == BottomSheetBehavior.STATE_COLLAPSED) {
+                    toggle.setImageResource(R.drawable.ic_expand_less_white_24dp);
+                } else if (newState == BottomSheetBehavior.STATE_EXPANDED) {
+                    toggle.setImageResource(R.drawable.ic_expand_more_white_24dp);
+                }
+            }
+
+            @Override
+            public void onSlide(@NonNull View bottomSheet, float slideOffset) {
+            }
+        });
+
+        this.foldersView.setLayoutManager(new LinearLayoutManager(this));
+        this.foldersView.setAdapter(new FoldersAdapter(this));
+
         setGameSeriesFilter(getGameSeriesFilter());
         setCharacterFilter(getCharacterFilter());
         setAmiiboSeriesFilter(getAmiiboSeriesFilter());
         setAmiiboTypeFilter(getAmiiboTypeFilter());
 
         this.swipeRefreshLayout.setOnRefreshListener(this);
-        this.listView.setLayoutManager(new LinearLayoutManager(this));
-        this.listView.setAdapter(new AmiiboFilesAdapter(this));
-        if (this.amiiboFiles == null) {
-            this.onRefresh();
+        this.amiibosView.setLayoutManager(new LinearLayoutManager(this));
+        this.amiibosView.setAdapter(new AmiibosAdapter(this));
+
+
+        String folderName = prefs.browserFolder().get();
+        File folder;
+        if (folderName == null) {
+            folder = Util.getDataDir();
         } else {
-            this.loadAmiiboManager();
-            this.setAmiiboFiles(this.amiiboFiles);
+            folder = new File(Util.getSDCardDir(), folderName);
+            if (!folder.exists() || !folder.isDirectory()) {
+                folder = Util.getDataDir();
+            }
         }
-    }
-
-    @Override
-    public void onRefresh() {
-        this.loadAmiiboManager();
-        this.runListAmiibos();
-    }
-
-    protected AmiiboFilesAdapter getListAdapter() {
-        return (AmiiboFilesAdapter) this.listView.getAdapter();
+        loadFolders(folder);
+        loadAmiiboManager();
     }
 
     @Override
@@ -230,6 +260,20 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         return result;
     }
 
+    protected AmiibosAdapter getAmiiboFilesAdapter() {
+        return (AmiibosAdapter) this.amiibosView.getAdapter();
+    }
+
+    protected FoldersAdapter getFoldersAdapter() {
+        return (FoldersAdapter) this.foldersView.getAdapter();
+    }
+
+    @Override
+    public void onRefresh() {
+        this.loadAmiiboManager();
+        this.loadFolders(getCurrentFolder());
+    }
+
     @Background
     void loadAmiiboManager() {
         AmiiboManager amiiboManager = null;
@@ -245,13 +289,65 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
     @UiThread
     void setAmiiboManager(AmiiboManager amiiboManager) {
         this.amiiboManager = amiiboManager;
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
+    }
+
+    File getCurrentFolder() {
+        return currentFolder;
+    }
+
+    @UiThread
+    void setCurrentFolder(File currentFolder) {
+        this.currentFolder = currentFolder;
+
+        String folderPath = Util.friendlyPath(currentFolder.getAbsolutePath());
+        prefs.browserFolder().put(folderPath);
+        this.currentFolderView.setText(folderPath);
+
+        this.getFoldersAdapter().setCurrentFolder(currentFolder);
+        this.getFoldersAdapter().notifyDataSetChanged();
+
+        loadAmiiboFiles();
     }
 
     @Background
-    void runListAmiibos() {
+    void loadFolders(File rootFolder) {
+        setCurrentFolder(rootFolder);
+
+        ArrayList<File> folders = listFolders(rootFolder);
+        Collections.sort(folders, new Comparator<File>() {
+            @Override
+            public int compare(File file1, File file2) {
+                return file1.getPath().compareToIgnoreCase(file2.getPath());
+            }
+        });
+        setFolders(folders);
+    }
+
+    ArrayList<File> listFolders(File rootFolder) {
+        ArrayList<File> folders = new ArrayList<>();
+
+        File[] files = rootFolder.listFiles();
+        if (files == null)
+            return folders;
+
+        for (File file : files) {
+            if (file.isDirectory()) {
+                folders.add(file);
+            }
+        }
+        return folders;
+    }
+
+    @UiThread
+    void setFolders(ArrayList<File> folders) {
+        this.getFoldersAdapter().setData(folders);
+    }
+
+    @Background
+    void loadAmiiboFiles() {
         setLoadingBarVisibility(true);
-        ArrayList<AmiiboFile> amiiboFiles = listAmiibos(Util.getDataDir());
+        ArrayList<AmiiboFile> amiiboFiles = listAmiibos(getCurrentFolder());
         setLoadingBarVisibility(false);
         setAmiiboFiles(amiiboFiles);
     }
@@ -282,10 +378,9 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
     @UiThread
     void setAmiiboFiles(ArrayList<AmiiboFile> amiiboFiles) {
         this.amiiboFiles = amiiboFiles;
-        this.getListAdapter().setData(amiiboFiles);
+        this.getAmiiboFilesAdapter().setData(amiiboFiles);
         if (amiiboFiles != null && amiiboFiles.size() == 0) {
-            String dirPath = Util.friendlyPath(Util.getDataDir().getAbsolutePath());
-            emptyText.setText("No Amiibo files found in\n" + dirPath);
+            emptyText.setText("No Amiibos found");
         } else {
             emptyText.setText("");
         }
@@ -435,64 +530,73 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         }
     }
 
+    @Click(R.id.toggle)
+    void onToggleClick() {
+        if (bottomSheetBehavior.getState() == BottomSheetBehavior.STATE_COLLAPSED) {
+            bottomSheetBehavior.setState(BottomSheetBehavior.STATE_EXPANDED);
+        } else {
+            bottomSheetBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);
+        }
+    }
+
     @OptionsItem(R.id.sort_id)
     void onSortIdClick() {
         setSort(SORT_ID);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_name)
     void onSortNameClick() {
         setSort(SORT_NAME);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_game_series)
     void onSortGameSeriesClick() {
         setSort(SORT_GAME_SERIES);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_character)
     void onSortCharacterClick() {
         setSort(SORT_CHARACTER);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_amiibo_series)
     void onSortAmiiboSeriesClick() {
         setSort(SORT_AMIIBO_SERIES);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_amiibo_type)
     void onSortAmiiboTypeClick() {
         setSort(SORT_AMIIBO_TYPE);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.sort_file_path)
     void onSortFilePathClick() {
         setSort(SORT_FILE_PATH);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.view_simple)
     void onViewSimpleClick() {
         setView(VIEW_TYPE_SIMPLE);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.view_compact)
     void onViewCompactClick() {
         setView(VIEW_TYPE_COMPACT);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.view_large)
     void onViewLargeClick() {
         setView(VIEW_TYPE_LARGE);
-        this.getListAdapter().refresh();
+        this.getAmiiboFilesAdapter().refresh();
     }
 
     @OptionsItem(R.id.refresh)
@@ -506,7 +610,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         SubMenu subMenu = menuFilterGameSeries.getSubMenu();
         subMenu.clear();
 
-        AmiiboFilesAdapter adapter = getListAdapter();
+        AmiibosAdapter adapter = getAmiiboFilesAdapter();
         if (amiiboManager == null)
             return false;
 
@@ -542,7 +646,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public boolean onMenuItemClick(MenuItem menuItem) {
             setGameSeriesFilter(menuItem.getTitle().toString());
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
             return false;
         }
     };
@@ -551,7 +655,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public void onCloseClick(View v) {
             setGameSeriesFilter("");
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
         }
     };
 
@@ -560,7 +664,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         SubMenu subMenu = menuFilterCharacter.getSubMenu();
         subMenu.clear();
 
-        AmiiboFilesAdapter adapter = getListAdapter();
+        AmiibosAdapter adapter = getAmiiboFilesAdapter();
         if (amiiboManager == null)
             return true;
 
@@ -596,7 +700,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public boolean onMenuItemClick(MenuItem menuItem) {
             setCharacterFilter(menuItem.getTitle().toString());
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
             return false;
         }
     };
@@ -606,7 +710,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         public void onCloseClick(View v) {
             setCharacterFilter("");
 
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
         }
     };
 
@@ -615,7 +719,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         SubMenu subMenu = menuFilterAmiiboSeries.getSubMenu();
         subMenu.clear();
 
-        AmiiboFilesAdapter adapter = getListAdapter();
+        AmiibosAdapter adapter = getAmiiboFilesAdapter();
         if (amiiboManager == null)
             return true;
 
@@ -651,7 +755,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public boolean onMenuItemClick(MenuItem menuItem) {
             setAmiiboSeriesFilter(menuItem.getTitle().toString());
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
             return false;
         }
     };
@@ -660,7 +764,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public void onCloseClick(View v) {
             setAmiiboSeriesFilter("");
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
         }
     };
 
@@ -669,7 +773,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         SubMenu subMenu = menuFilterAmiiboType.getSubMenu();
         subMenu.clear();
 
-        AmiiboFilesAdapter adapter = getListAdapter();
+        AmiibosAdapter adapter = getAmiiboFilesAdapter();
         if (amiiboManager == null)
             return true;
 
@@ -705,7 +809,7 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public boolean onMenuItemClick(MenuItem menuItem) {
             setAmiiboTypeFilter(menuItem.getTitle().toString());
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
             return false;
         }
     };
@@ -714,21 +818,169 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         @Override
         public void onCloseClick(View v) {
             setAmiiboTypeFilter("");
-            getListAdapter().refresh();
+            getAmiiboFilesAdapter().refresh();
         }
     };
 
     @Override
     public boolean onQueryTextChange(String query) {
-        this.getListAdapter().getFilter().filter(query);
+        this.getAmiiboFilesAdapter().getFilter().filter(query);
         return true;
     }
 
     @Override
     public boolean onQueryTextSubmit(String query) {
-        this.getListAdapter().getFilter().filter(query);
+        this.getAmiiboFilesAdapter().getFilter().filter(query);
         searchView.clearFocus();
         return true;
+    }
+
+    static abstract class FolderViewHolder extends RecyclerView.ViewHolder {
+        public FolderViewHolder(View itemView) {
+            super(itemView);
+        }
+
+        abstract void bind(BrowserActivity activity, File folder);
+    }
+
+    static class ParentFolderViewHolder extends FolderViewHolder {
+        BrowserActivity activity;
+        File folder;
+
+        public ParentFolderViewHolder(ViewGroup parent) {
+            this(LayoutInflater
+                .from(parent.getContext())
+                .inflate(R.layout.parent_folder_view, parent, false));
+        }
+
+        public ParentFolderViewHolder(View itemView) {
+            super(itemView);
+
+            this.itemView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    activity.loadFolders(folder);
+                }
+            });
+        }
+
+        @Override
+        void bind(BrowserActivity activity, File folder) {
+            this.activity = activity;
+            this.folder = folder;
+        }
+    }
+
+    static class ChildFolderViewHolder extends FolderViewHolder {
+        BrowserActivity activity;
+        File folder;
+        TextView txtFolderName;
+
+        public ChildFolderViewHolder(ViewGroup parent) {
+            this(LayoutInflater
+                .from(parent.getContext())
+                .inflate(R.layout.child_folder_view, parent, false));
+        }
+
+        public ChildFolderViewHolder(View itemView) {
+            super(itemView);
+
+            this.txtFolderName = itemView.findViewById(R.id.text);
+            this.itemView.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View view) {
+                    activity.loadFolders(folder);
+                }
+            });
+        }
+
+        @Override
+        void bind(BrowserActivity activity, File folder) {
+            this.activity = activity;
+            this.folder = folder;
+            this.txtFolderName.setText(folder.getName());
+        }
+    }
+
+    static class FoldersAdapter extends RecyclerView.Adapter<FolderViewHolder> {
+        public static final int PARENT_FOLDER_VIEW_TYPE = 0;
+        public static final int CHILD_FOLDER_VIEW_TYPE = 1;
+
+        BrowserActivity activity;
+        ArrayList<File> data;
+        File currentFolder;
+        boolean showParent = false;
+
+        public FoldersAdapter(BrowserActivity activity) {
+            this.activity = activity;
+            this.data = new ArrayList<>();
+            this.registerAdapterDataObserver(new RecyclerView.AdapterDataObserver() {
+                @Override
+                public void onChanged() {
+                    showParent = showParentFolder();
+                }
+            });
+        }
+
+        void setCurrentFolder(File folder) {
+            this.currentFolder = folder;
+        }
+
+        void setData(ArrayList<File> data) {
+            this.data.clear();
+            if (data != null)
+                this.data.addAll(data);
+
+            this.notifyDataSetChanged();
+        }
+
+        @Override
+        public FolderViewHolder onCreateViewHolder(ViewGroup parent, int viewType) {
+            switch (viewType) {
+                case PARENT_FOLDER_VIEW_TYPE:
+                    return new ParentFolderViewHolder(parent);
+                case CHILD_FOLDER_VIEW_TYPE:
+                    return new ChildFolderViewHolder(parent);
+                default:
+                    throw new RuntimeException();
+            }
+        }
+
+        @Override
+        public void onBindViewHolder(FolderViewHolder holder, int position) {
+            File folder;
+            if (holder instanceof ParentFolderViewHolder) {
+                folder = this.currentFolder.getParentFile();
+            } else {
+                if (showParent) {
+                    position -= 1;
+                }
+                folder = data.get(position);
+            }
+            holder.bind(activity, folder);
+        }
+
+        @Override
+        public int getItemViewType(int position) {
+            if (position == 0 && showParent) {
+                return PARENT_FOLDER_VIEW_TYPE;
+            } else {
+                return CHILD_FOLDER_VIEW_TYPE;
+            }
+        }
+
+        public boolean showParentFolder() {
+            return (currentFolder != null && !currentFolder.equals(Util.getSDCardDir())) && currentFolder.getAbsolutePath().startsWith(Util.getSDCardDir().getAbsolutePath());
+        }
+
+        @Override
+        public int getItemCount() {
+            int count = data.size();
+            if (showParent) {
+                count += 1;
+            }
+            return count;
+        }
     }
 
     static abstract class AmiiboVewHolder extends RecyclerView.ViewHolder {
@@ -946,13 +1198,13 @@ public class BrowserActivity extends AppCompatActivity implements SearchView.OnQ
         }
     }
 
-    static class AmiiboFilesAdapter extends RecyclerView.Adapter<AmiiboVewHolder> implements Filterable {
+    static class AmiibosAdapter extends RecyclerView.Adapter<AmiiboVewHolder> implements Filterable {
         private final BrowserActivity activity;
         private ArrayList<AmiiboFile> data;
         private ArrayList<AmiiboFile> filteredData;
         private AmiiboFilter filter;
 
-        AmiiboFilesAdapter(BrowserActivity activity) {
+        AmiibosAdapter(BrowserActivity activity) {
             this.activity = activity;
             this.data = new ArrayList<>();
             this.filteredData = this.data;

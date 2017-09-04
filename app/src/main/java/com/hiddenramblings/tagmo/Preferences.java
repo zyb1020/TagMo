@@ -34,4 +34,6 @@ public interface Preferences {
 
     @DefaultString(keyRes=R.string.image_network_settings, value=SettingsFragment.IMAGE_NETWORK_ALWAYS)
     String imageNetworkSetting();
+
+    String browserFolder();
 }

@@ -2,6 +2,7 @@ package com.hiddenramblings.tagmo;
 
 import android.content.DialogInterface;
 import android.graphics.Bitmap;
+import android.support.annotation.NonNull;
 import android.support.design.widget.BottomSheetBehavior;
 import android.support.v7.app.AlertDialog;
 import android.support.v7.app.AppCompatActivity;
@@ -61,7 +62,7 @@ public class ImageActivity extends AppCompatActivity {
     @ViewById(R.id.txtAmiiboSeries)
     TextView txtAmiiboSeries;
 
-    BottomSheetBehavior mBottomSheetBehavior1;
+    BottomSheetBehavior bottomSheetBehavior;
 
     @Extra(INTENT_EXTRA_AMIIBO_ID)
     long amiiboId;
@@ -71,14 +72,27 @@ public class ImageActivity extends AppCompatActivity {
 
     @AfterViews
     void afterViews() {
-        mBottomSheetBehavior1 = BottomSheetBehavior.from(bottomSheet);
-        mBottomSheetBehavior1.setState(BottomSheetBehavior.STATE_COLLAPSED);
+        bottomSheetBehavior = BottomSheetBehavior.from(bottomSheet);
+        bottomSheetBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);
+        bottomSheetBehavior.setBottomSheetCallback(new BottomSheetBehavior.BottomSheetCallback() {
+            @Override
+            public void onStateChanged(@NonNull View bottomSheet, int newState) {
+                if (newState == BottomSheetBehavior.STATE_COLLAPSED) {
+                    toggle.setImageResource(R.drawable.ic_expand_less_white_24dp);
+                } else if (newState == BottomSheetBehavior.STATE_EXPANDED) {
+                    toggle.setImageResource(R.drawable.ic_expand_more_white_24dp);
+                }
+            }
+
+            @Override
+            public void onSlide(@NonNull View bottomSheet, float slideOffset) {}
+        });
 
         toggle.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
             @Override
             public void onLayoutChange(View view, int i, int i1, int i2, int i3, int i4, int i5, int i6, int i7) {
                 int height = ((View) view.getParent()).getPaddingTop() + view.getHeight() + view.getPaddingBottom();
-                mBottomSheetBehavior1.setPeekHeight(height);
+                bottomSheetBehavior.setPeekHeight(height);
                 imageView.setPadding(imageView.getPaddingLeft(), imageView.getPaddingTop(), imageView.getPaddingRight(), imageView.getPaddingTop() + height);
             }
         });
@@ -89,12 +103,10 @@ public class ImageActivity extends AppCompatActivity {
 
     @Click(R.id.toggle)
     void onToggleClick() {
-        if (mBottomSheetBehavior1.getState() == BottomSheetBehavior.STATE_COLLAPSED) {
-            toggle.setImageResource(R.drawable.ic_expand_more_white_24dp);
-            mBottomSheetBehavior1.setState(BottomSheetBehavior.STATE_EXPANDED);
+        if (bottomSheetBehavior.getState() == BottomSheetBehavior.STATE_COLLAPSED) {
+            bottomSheetBehavior.setState(BottomSheetBehavior.STATE_EXPANDED);
         } else {
-            toggle.setImageResource(R.drawable.ic_expand_less_white_24dp);
-            mBottomSheetBehavior1.setState(BottomSheetBehavior.STATE_COLLAPSED);
+            bottomSheetBehavior.setState(BottomSheetBehavior.STATE_COLLAPSED);
         }
     }
 
@@ -180,7 +192,7 @@ public class ImageActivity extends AppCompatActivity {
 
     @OptionsItem(R.id.mnu_save)
     void onSaveClicked() {
-        mBottomSheetBehavior1.setState(BottomSheetBehavior.STATE_EXPANDED);
+        bottomSheetBehavior.setState(BottomSheetBehavior.STATE_EXPANDED);
         if (true)
             return;
 

@@ -11,7 +11,6 @@ import com.hiddenramblings.tagmo.amiibo.AmiiboManager;
 import org.json.JSONException;
 
 import java.io.File;
-import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -93,8 +92,12 @@ public class Util {
         }
     }
 
+    public static File getSDCardDir() {
+        return Environment.getExternalStorageDirectory();
+    }
+
     public static File getDataDir() {
-        return new File(Environment.getExternalStorageDirectory(), DATA_DIR);
+        return new File(getSDCardDir(), DATA_DIR);
     }
 
     public static class AmiiboInfoException extends Exception {
@@ -157,7 +160,7 @@ public class Util {
 
     public static String friendlyPath(String filePath) {
         String dirPath = filePath;
-        String sdcardPath = Environment.getExternalStorageDirectory().getAbsolutePath();
+        String sdcardPath = getSDCardDir().getAbsolutePath();
         if (dirPath.startsWith(sdcardPath)) {
             filePath = filePath.substring(sdcardPath.length());
         }
